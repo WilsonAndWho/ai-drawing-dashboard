@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 绘图工场 (增强版+推送+拖拽+隐藏记录+速度曲线)</title>
+    <style>
+        /* ... (基础样式) ... */
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background: #121212; color: #e0e0e0; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Sidebar 修改: 去掉固定宽度，改为由JS控制style，flex-shrink:0防止压缩 */
+        .sidebar { width: 340px; background: #1e1e1e; padding: 15px; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid #333; z-index: 10; user-select: none; overflow-y: auto; flex-shrink: 0; }
+        
+        /* 拖拽条样式 */
+        .resizer { width: 5px; background: #2a2a2a; cursor: col-resize; z-index: 11; transition: background 0.2s; flex-shrink: 0; }
+        .resizer:hover, .resizer.active { background: #1a73e8; }
+
+        .main-area { flex: 1; display: flex; flex-direction: column; background: #252526; position: relative; min-width: 0; }
+        .status-grid { flex: 1; padding: 15px; overflow-y: scroll; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); grid-auto-rows: 140px; gap: 10px; align-content: start; }
+        
+        /* 新增：图表容器样式 */
+        .chart-container { height: 100px; background: #1a1a1a; border-top: 1px solid #333; position: relative; width: 100%; flex-shrink: 0; overflow: hidden; }
+        #speedChart { display: block; width: 100%; height: 100%; }
+        .chart-info { position: absolute; top: 4px; right: 8px; font-size: 10px; color: #666; font-family: 'Consolas', monospace; pointer-events: none; text-align: right; background: rgba(0,0,0,0.5); padding: 4px 6px; border-radius: 2px; border: 1px solid #333;}
+
+        .global-log { height: 200px; background: #000; border-top: 1px solid #333; padding: 8px; font-family: 'Consolas', monospace; font-size: 11px; overflow-y: auto; white-space: pre-wrap; }
+        
+        label { display: block; font-size: 11px; color: #888; font-weight: 600; margin-bottom: 2px; }
+        input, textarea, select { width: 100%; background: #2d2d2d; border: 1px solid #444; color: #ddd; padding: 6px; border-radius: 4px; box-sizing: border-box; font-family: inherit; font-size: 12px; }
+        input:focus, textarea:focus { border-color: #1a73e8; outline: none; }
+        textarea { height: 60px; resize: vertical; }
+        button { width: 100%; padding: 10px; border: none; border-radius: 4px; color: white; cursor: pointer; font-weight: 600; font-size: 12px; }
+        button:hover { opacity: 0.9; } button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #1a73e8; } .btn-danger { background: #d32f2f; } .btn-stop { background: #ff9800; color: #000; } .btn-info { background: #0097a7; }
+        .btn-group { display: flex; gap: 8px; margin-top: 5px; }
+
+        .preview-list { display: flex; gap: 5px; flex-wrap: wrap; background: #262626; padding: 5px; border-radius: 4px; min-height: 40px; }
+        .preview-thumb { width: 40px; height: 40px; border: 1px solid #444; object-fit: cover; cursor: grab; background: #eee; transition: opacity 0.2s; }
+        .preview-thumb:active { cursor: grabbing; }
+        
+        .task-card { background: #2d2d2d; border-radius: 4px; padding: 8px; border-left: 3px solid #555; display: flex; flex-direction: column; gap: 2px; position: relative; }
+        .t-head { display: flex; justify-content: space-between; font-size: 11px; color: #777; }
+        .t-stat { font-weight: bold; font-size: 12px; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+        .t-info { font-size: 10px; color: #666; height: 14px; overflow: hidden; white-space: nowrap; display: flex; justify-content: space-between;}
+        .t-img-box { flex: 1; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: 4px 0; border-radius: 2px; }
+        .t-img-box img { width: 100%; height: 100%; object-fit: contain; }
+        .t-bar-bg { height: 4px; background: #333; width: 100%; border-radius: 2px; overflow: hidden; margin-top: 2px; }
+        .t-fill { height: 100%; width: 100%; transform: scaleX(0); transform-origin: left; transition: transform 0.2s linear, background-color 0.3s; }
+
+        /* 状态颜色 */
+        .s-up   { border-color: #2196f3; } .s-up   .t-stat { color: #2196f3; } .s-up   .t-fill { background-color: #2196f3; }
+        .s-wait-resp { border-color: #e040fb; } .s-wait-resp .t-stat { color: #e040fb; } .s-wait-resp .t-fill { background-color: #e040fb; }
+        .s-done { border-color: #00e676; } .s-done .t-stat { color: #00e676; } .s-done .t-fill { background-color: #00e676; }
+        .s-err  { border-color: #f44336; } .s-err .t-stat { color: #f44336; }
+        .s-abt  { border-color: #ff9800; } .s-abt .t-stat { color: #ff9800; }
+        .s-ign  { border-color: #777; opacity: 0.7; } .s-ign .t-stat { color: #888; } 
+        .s-part { border-color: #d4e157; } .s-part .t-stat { color: #d4e157; } 
+        
+        .log-line { margin-bottom: 2px; border-bottom: 1px solid #1a1a1a; word-break: break-all; }
+        .c-suc { color: #69f0ae; } .c-err { color: #ff5252; } .c-sys { color: #64b5f6; } 
+        .c-warn { color: #ffb74d; } .c-debug { color: #777; font-style: italic; }
+        .c-cot { color: #ffd740; font-family: 'Courier New', Courier, monospace; } 
+
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 100; display: none; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+        .modal-content { background: #1e1e1e; width: 95%; max-width: 1800px; height: 95%; border-radius: 8px; border: 1px solid #333; display: flex; flex-direction: column; padding: 20px; box-shadow: 0 0 30px rgba(0,0,0,0.6); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .modal-body { flex: 1; overflow-y: auto; padding-right: 5px; }
+        
+        .history-item { background: #262626; padding: 15px; margin-bottom: 12px; border-radius: 6px; border-left: 4px solid #444; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; content-visibility: auto; contain-intrinsic-size: 250px; }
+        .history-item:hover { background: #2d2d2d; border-left-color: #1a73e8; }
+        .history-item.is-hidden { opacity: 0.6; border-left-color: #555; border-left-style: dashed; }
+        
+        .h-col-left { display: flex; flex-direction: column; gap: 8px; border-right: 1px solid #333; padding-right: 15px; min-width: 0; }
+        .h-prompt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;}
+        .h-prompt { color: #eee; font-size: 13px; font-weight: 500; white-space: pre-wrap; word-break: break-word; line-height: 1.5; max-height: 250px; overflow-y: auto; background: #1a1a1a; padding: 10px; border-radius: 4px; border: 1px solid #333; }
+        .h-col-right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+        .h-stats-row { display: flex; align-items: center; flex-wrap: wrap; gap: 15px; background: #1a1a1a; padding: 10px 14px; border-radius: 4px; font-size: 14px; border: 1px solid #333; }
+        .stat-tag { font-family: 'Consolas', monospace; font-weight: bold; display: flex; align-items: center; gap: 4px; font-size: 15px; }
+        .c-money { color: #ffd740; } .c-rate  { color: #69f0ae; } .c-conf  { color: #40c4ff; } .c-count { color: #fff; } .c-time  { color: #888; font-weight: normal; margin-left: auto; font-size: 12px; } 
+        .h-imgs-ref { font-size: 12px; color: #64b5f6; display: flex; gap: 5px; align-items: center; } 
+        .h-out-grid { display: flex; gap: 8px; flex-wrap: wrap; background: #151515; padding: 8px; border-radius: 4px; }
+        .h-out-item { width: 70px; height: 70px; background: #333; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; border: 1px solid #444; transition: transform 0.2s; }
+        .h-out-item:hover { transform: scale(1.05); border-color: #888; z-index: 1; }
+        .h-out-item img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
+        .h-out-txt { font-size: 10px; color: #aaa; text-align: center; word-break: break-all; padding: 2px; }
+        .h-copy-btn { background: #333; border: 1px solid #555; color: #ccc; font-size: 11px; padding: 4px 10px; border-radius: 3px; cursor: pointer; width: auto; align-self: flex-start; transition: all 0.2s; }
+        .h-copy-btn:hover { background: #555; color: #fff; border-color: #777; }
+        .h-del-btn { background: #2b1111; border-color: #522; color: #e57373; }
+        .h-del-btn:hover { background: #b71c1c; border-color: #d32f2f; color: #fff; }
+        
+        .h-feat-btn { background: #333; border: 1px solid #555; color: #888; font-size: 11px; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
+        .h-feat-btn.active { color: #ffd740; border-color: #ffd740; background: #3a331a; }
+        .tab-btn { background: #222; border: 1px solid #444; color: #888; padding: 5px 15px; cursor: pointer; font-size: 12px; border-radius: 4px; }
+        .tab-btn.active { background: #1a73e8; color: white; border-color: #1a73e8; }
+        .edit-panel { display: none; background: #202020; border: 1px dashed #444; padding: 10px; border-radius: 4px; flex-direction: column; gap: 8px; margin-bottom: 5px; }
+        .edit-row { display: flex; gap: 10px; align-items: center; }
+        .edit-row label { width: 50px; margin: 0; color: #aaa; }
+        
+        /* 隐藏类，用于切换显示 */
+        .provider-group { display: none; }
+        .provider-group.active { display: block; }
+        .section-title { font-size: 10px; color: #aaa; border-bottom: 1px solid #333; margin-bottom: 5px; padding-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+		
+        .h-diff-ins {
+            background-color: rgba(46, 125, 50, 0.4);
+            color: #a5d6a7;
+            border-bottom: 1px dashed #66bb6a;
+            padding: 0 1px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar" id="sidebar">
+    <h2 style="margin:0; color:#fff; font-size:16px;">🎨 AI 绘图工场</h2>
+    
+    <div>
+        <label>⚡ API 服务商</label>
+        <select id="apiProvider" class="provider-select" onchange="toggleProviderUI()">
+            <option value="liaobots">Source A: Liaobots</option>
+            <option value="banana">Source B: SillyDream</option>
+        </select>
+    </div>
+
+    <div><textarea id="prompt" placeholder="提示词 (自动保存)">Generate two dogs in manga style.</textarea></div>
+    
+    <div style="background:#262626; padding:5px; border-radius:4px; border:1px solid #333;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <label style="margin:0;">参考图 & 压缩 (可拖拽排序)</label>
+            <button onclick="document.getElementById('imgInput').click()" style="width:auto; padding:2px 8px; font-size:10px; background:#444;">+ 添加图片</button>
+        </div>
+        <div style="margin-bottom:5px;">
+            <select id="compressionRate" title="图片预处理设置" style="padding:4px; font-size:11px;">
+                <option value="1">100% (转JPG/原画)</option>
+                <option value="0.95">95% (极高画质)</option>
+                <option value="0.9">90% (高画质)</option>
+                <option value="0.8" selected>80% (推荐 - 平衡)</option>
+                <option value="0.5">50% (极速模式)</option>
+            </select>
+        </div>
+        <input type="file" id="imgInput" multiple accept="image/*" style="display:none">
+        <div id="previewList" class="preview-list"></div>
+        <div id="compressionLog" style="font-size:9px; color:#888; margin-top:2px; height:12px;"></div>
+    </div>
+
+    <div id="group-liaobots" class="provider-group active">
+        <div class="section-title">Liaobots 参数</div>
+        <div style="margin-bottom:5px;"><label>Liaobots API Key</label><input type="text" id="apiKey-liaobots" placeholder="sk-..." style="color:#81c784;"></div>
+        <div style="display:flex; gap:5px;">
+            <div style="flex:1"><label>比例</label><select id="ar-liao"><option value="">默认</option><option value="16:9">16:9</option><option value="1:1">1:1</option><option value="9:16">9:16</option></select></div>
+            <div style="flex:1"><label>尺寸</label><select id="size-liao"><option value="1K">1K</option><option value="2K">2K</option><option value="4K">4K</option></select></div>
+        </div>
+    </div>
+
+    <div id="group-banana" class="provider-group">
+        <div class="section-title">SillyDream 参数</div>
+        <div style="margin-bottom:5px;"><label>SillyDream API Key</label><input type="text" id="apiKey-banana" placeholder="Key..." style="color:#ffcc80;"></div>
+        <div><label>Base URL</label><input type="text" id="baseUrl-banana" value=""></div>
+        <div><label>模型名称</label><input type="text" id="model-banana" value="gemini-3-pro-image-preview"></div>
+        <div style="display:flex; gap:5px; margin-top:5px;">
+            <div style="flex:1"><label>随机种子 (-1=随机)</label><input type="number" id="seed-banana" value="-1" placeholder="-1"></div>
+            <div style="flex:1"><label>尺寸</label><select id="size-banana"><option value="4K">4K</option><option value="2K">2K</option><option value="1K">1K</option></select></div>
+        </div>
+        <div style="margin-top:5px;"><label>比例</label>
+            <select id="ar-banana">
+                <option value="Adaptive">自适应</option>
+                <option value="1:1">1:1 (正方形)</option>
+                <option value="4:3">4:3</option>
+                <option value="16:9">16:9</option>
+                <option value="3:4">3:4</option>
+                <option value="9:16">9:16</option>
+            </select>
+        </div>
+    </div>
+    
+    <div style="border:1px solid #333; padding:8px; border-radius:4px; background:#222;">
+        <div style="display:flex; gap:5px; margin-bottom: 5px;">
+            <div style="flex:1"><label>并发数</label><input type="number" id="concurrency" value="3" min="1" max="10"></div>
+            <div style="flex:1"><label>成功目标数</label><input type="number" id="targetCount" value="10" min="1"></div>
+        </div>
+        <div><label>最大尝试次数 (0=无限)</label><input type="number" id="maxRequests" value="20" min="0"></div>
+        <!-- 增加 PushPlus 开关 -->
+        <div style="margin-top:8px; display:flex; align-items:center;">
+             <input type="checkbox" id="enablePush" style="width:auto; margin-right:5px; cursor:pointer;">
+             <label for="enablePush" style="margin:0; cursor:pointer;">🔔 开启 PushPlus 推送</label>
+        </div>
+    </div>
+
+    <div>
+        <label>💾 自动保存目录</label>
+        <button onclick="selectSaveDir()">📂 选择/授权文件夹</button>
+        <div id="dirStatus" style="font-size:10px; color:#666; margin-top:2px; white-space:nowrap; overflow:hidden;">未选择</div>
+    </div>
+    
+    <button class="btn-info" onclick="HistoryManager.show()">📜 查看生成历史</button>
+
+    <div class="btn-group">
+        <button id="btnStart" class="btn-primary" onclick="scheduler.start()">开始任务</button>
+        <button id="btnStop" class="btn-danger" onclick="scheduler.stopGracefully()" disabled>停止</button>
+    </div>
+    <div style="margin-top:auto;">
+        <div id="statMain" style="color:white; font-weight:bold; font-size:12px;">就绪</div>
+        <div id="statSub" style="color:#666; font-size:10px;">等待指令...</div>
+    </div>
+</div>
+
+<!-- 侧边栏调整拖动条 -->
+<div class="resizer" id="resizer"></div>
+
+<div class="main-area">
+    <div id="taskGrid" class="status-grid"></div>
+    
+    <!-- 新增：下载速度曲线图容器 -->
+    <div class="chart-container">
+        <canvas id="speedChart"></canvas>
+        <div id="chartInfo" class="chart-info">Ready</div>
+    </div>
+    
+    <div id="logArea" class="global-log"></div>
+</div>
+
+<div id="historyModal" class="modal-overlay">
+    <div class="modal-content">
+        <!-- History Modal Content -->
+        <div class="modal-header">
+            <div style="display:flex; gap:10px; align-items:center;">
+                <h3 style="margin:0; font-size:16px;">📜 历史生成统计</h3>
+                <button id="tabAll" class="tab-btn active" onclick="HistoryManager.switchTab('all')">全部记录</button>
+                <button id="tabFeat" class="tab-btn" onclick="HistoryManager.switchTab('featured')">⭐ 精选</button>
+                
+                <label style="font-size:12px; display:flex; align-items:center; gap:4px; margin-left:10px; cursor:pointer; user-select:none;">
+                    <input type="checkbox" id="historyShowHidden" onchange="HistoryManager.filterAndRender()" style="width:auto;"> 👁️ 显示隐藏
+                </label>
+            </div>
+            <button onclick="HistoryManager.hide()" style="width:auto; padding:5px 10px;">关闭</button>
+        </div>
+        <div style="margin-bottom:10px;"><input type="text" id="historySearch" placeholder="搜索提示词..." oninput="HistoryManager.filterAndRender()"></div>
+        <div id="historyList" class="modal-body"></div>
+    </div>
+</div>
+
+<script id="worker-code" type="javascript/worker">
+    function fmtBytes(bytes) {
+        if(bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    let lastProgressTime = 0;
+    function postProgress(msg) {
+        const now = Date.now();
+        if (now - lastProgressTime > 100 || (msg.loaded && msg.total && msg.loaded === msg.total)) {
+            postMessage(msg);
+            lastProgressTime = now;
+        }
+    }
+
+    // --- 辅助函数：生成报文地图 (用于调试，忽略大数据) ---
+    function generateLogMap(obj, depth = 0) {
+        if (depth > 6) return "[...Depth Limit...]";
+        if (obj === null) return null;
+        if (obj === undefined) return undefined;
+        
+        if (typeof obj === 'string') {
+            // 如果字符串特别长（超过500字符），大概率是Base64或长文本，进行截断显示
+            if (obj.length > 500) return `<String Len:${obj.length}>`;
+            return obj;
+        }
+        
+        if (Array.isArray(obj)) {
+            // 数组保留结构
+            return obj.map(item => generateLogMap(item, depth + 1));
+        }
+        
+        if (typeof obj === 'object') {
+            const mapObj = {};
+            for (const key in obj) {
+                // 如果key本身包含 data 字样且内容是长字符串，格外注意
+                if ((key === 'data' || key === 'inlineData') && typeof obj[key] === 'string' && obj[key].length > 100) {
+                    mapObj[key] = `<Base64 Data Len:${obj[key].length}>`;
+                } else {
+                    mapObj[key] = generateLogMap(obj[key], depth + 1);
+                }
+            }
+            return mapObj;
+        }
+        return obj;
+    }
+
+    // --- 核心修复：深度递归查找 JSON 树中的所有图片 ---
+    function findAllImagesInTree(obj, found = []) {
+        if (!obj) return found;
+
+        if (obj.inlineData && obj.inlineData.data && typeof obj.inlineData.data === 'string') {
+            found.push({
+                mime: obj.inlineData.mimeType || 'image/png',
+                data: obj.inlineData.data
+            });
+        }
+        else if (obj.data && typeof obj.data === 'string' && obj.data.length > 1000) {
+             found.push({
+                mime: obj.mimeType || 'image/png', 
+                data: obj.data
+            });
+        }
+
+        if (Array.isArray(obj)) {
+            for (let item of obj) findAllImagesInTree(item, found);
+        } else if (typeof obj === 'object') {
+            for (let key in obj) {
+                if (obj.hasOwnProperty(key) && typeof obj[key] === 'object') {
+                    findAllImagesInTree(obj[key], found);
+                }
+            }
+        }
+        return found;
+    }
+
+    function chunksToString(chunks) {
+        if (!chunks || chunks.length === 0) return "";
+        let totalLen = 0;
+        for (let c of chunks) totalLen += c.length;
+        let all = new Uint8Array(totalLen);
+        let pos = 0;
+        for (let c of chunks) { all.set(c, pos); pos += c.length; }
+        return new TextDecoder("utf-8", {fatal: false}).decode(all);
+    }
+
+    function tryRecoverPartialImage(id, rawString) {
+        if (!rawString || rawString.length < 500) return false; 
+        
+        const headers = [
+            { sig: '/9j/', mime: 'image/jpeg' },
+            { sig: 'iVBOR', mime: 'image/png' },
+            { sig: 'UklGR', mime: 'image/webp' }
+        ];
+
+        let bestStartIndex = -1;
+        let detectedMime = 'image/jpeg';
+
+        const jsonKeyRegex = /"data"\s*:\s*"/g;
+        let match;
+        while ((match = jsonKeyRegex.exec(rawString)) !== null) {
+            bestStartIndex = match.index + match[0].length;
+        }
+
+        if (bestStartIndex === -1) {
+            for (const h of headers) {
+                const idx = rawString.lastIndexOf(h.sig);
+                if (idx !== -1 && idx > bestStartIndex) {
+                    bestStartIndex = idx;
+                    detectedMime = h.mime;
+                }
+            }
+        }
+
+        if (bestStartIndex === -1) return false;
+
+        let base64Segment = rawString.substring(bestStartIndex);
+        const endQuoteIndex = base64Segment.indexOf('"');
+        
+        if (endQuoteIndex !== -1) {
+            base64Segment = base64Segment.substring(0, endQuoteIndex);
+        } else {
+            base64Segment = base64Segment.replace(/[^A-Za-z0-9+/=]/g, '');
+        }
+
+        if (base64Segment.length < 2000) return false;
+
+        const mod = base64Segment.length % 4;
+        if (mod > 0) {
+            base64Segment += '='.repeat(4 - mod);
+        }
+        
+        try {
+            const binaryString = atob(base64Segment);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+            
+            postMessage({ 
+                type: 'image', 
+                id, 
+                blob: new Blob([bytes], { type: detectedMime }), 
+                isPartial: true 
+            });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async function runLiaobots(id, config) {
+        let chunks = []; 
+        try {
+            const payloadObj = {
+                contents: [{
+                    parts: [
+                        { text: config.prompt },
+                        ...config.images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } }))
+                    ]
+                }],
+                generationConfig: {
+                    imageConfig: {
+                        imageSize: config.imageSize,
+                        ...(config.aspectRatio ? { aspectRatio: config.aspectRatio } : {})
+                    },
+                    responseModalities: ["TEXT", "IMAGE"]
+                }
+            };
+            
+            postMessage({ type: 'upload_progress', id, loaded: 100, total: 100 });
+
+            const controller = new AbortController();
+            self.currentController = controller;
+
+            const response = await fetch("", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
+                body: JSON.stringify(payloadObj),
+                signal: controller.signal
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errText.substring(0, 300)}`);
+            }
+
+            const reader = response.body.getReader();
+            let receivedLength = 0;
+            
+            while(true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                receivedLength += value.length;
+                postProgress({ type: 'download_progress', id, loaded: receivedLength });
+            }
+
+            const resultString = chunksToString(chunks);
+            handleGeminiResponse(id, JSON.parse(resultString));
+
+        } catch (error) {
+            if (chunks.length > 0) {
+                const recoveredString = chunksToString(chunks);
+                const recovered = tryRecoverPartialImage(id, recoveredString);
+                
+                if (recovered) {
+                    postMessage({ type: 'error', id, msg: "Partial Recovery" });
+                    return; 
+                } else {
+                     postMessage({ type: 'log_cot', id, text: `[Debug] Network Error. Data len: ${recoveredString.length}. Recovery failed.` });
+                }
+            }
+
+            if (error.name === 'AbortError') postMessage({ type: 'aborted', id });
+            else postMessage({ type: 'error', id, msg: error.message });
+        }
+    }
+
+    async function runBanana(id, config) {
+        let chunks = []; 
+        try {
+            const parts = [
+                ...config.images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } })),
+                { text: config.prompt }
+            ];
+            const seed = (config.seed === -1 || config.seed === undefined || config.seed === "") ? Math.floor(Math.random() * 0xffffffffffffffff) : parseInt(config.seed);
+            const imageConfig = { imageSize: config.imageSize };
+            if (config.aspectRatio && config.aspectRatio !== "Adaptive") imageConfig.aspectRatio = config.aspectRatio;
+
+            const payloadObj = {
+                contents: [{ role: "user", parts: parts }],
+                seed: seed,
+                generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: imageConfig }
+            };
+
+            const cleanUrl = config.baseUrl.replace(/\/+$/, '');
+            const url = `${cleanUrl}/v1beta/models/${config.model}:generateContent`;
+
+            postMessage({ type: 'log_debug', id, msg: `[SillyDream] Seed:${seed}` });
+            postMessage({ type: 'upload_progress', id, loaded: 100, total: 100 }); 
+
+            const controller = new AbortController();
+            self.currentController = controller;
+
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Authorization": "Bearer " + config.apiKey, "Content-Type": "application/json", "X-Banana-Client": "comfyui-banana-li" },
+                body: JSON.stringify(payloadObj),
+                signal: controller.signal
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errText.substring(0, 300)}`);
+            }
+
+            const reader = response.body.getReader();
+            let receivedLength = 0;
+
+            while(true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                receivedLength += value.length;
+                postProgress({ type: 'download_progress', id, loaded: receivedLength });
+            }
+
+            const resultString = chunksToString(chunks);
+            handleGeminiResponse(id, JSON.parse(resultString));
+
+        } catch (error) {
+            if (chunks.length > 0) {
+                const recoveredString = chunksToString(chunks);
+                const recovered = tryRecoverPartialImage(id, recoveredString);
+                
+                if (recovered) {
+                    postMessage({ type: 'error', id, msg: "Partial Recovery" });
+                    return;
+                } else {
+                     postMessage({ type: 'log_cot', id, text: `[Debug] Network Error. Data len: ${recoveredString.length}. Recovery failed.` });
+                }
+            }
+
+            if (error.name === 'AbortError') postMessage({ type: 'aborted', id });
+            else postMessage({ type: 'error', id, msg: error.message });
+        }
+    }
+
+    function handleGeminiResponse(id, data) {
+        try {
+            const map = generateLogMap(data);
+            postMessage({ type: 'log_raw_json', id, json: map });
+        } catch(e) {}
+
+        const candidates = data.candidates || [];
+        let fullText = "";
+        candidates.forEach(cand => {
+            if(cand.content && cand.content.parts) {
+                cand.content.parts.forEach(part => {
+                    if (part.text) fullText += part.text + "\n";
+                });
+            }
+        });
+        if (fullText.trim()) postMessage({ type: 'log_cot', id, text: fullText.trim() });
+
+        const finishReason = data.candidates?.[0]?.finishReason;
+        const allFoundImages = findAllImagesInTree(data);
+
+        if (allFoundImages.length > 0) {
+            allFoundImages.sort((a, b) => b.data.length - a.data.length);
+            
+            const bestImg = allFoundImages[0];
+            const sizeKB = Math.round(bestImg.data.length / 1024);
+            
+            postMessage({ type: 'log_debug', id, msg: `Found ${allFoundImages.length} images. Best: ${sizeKB}KB (Base64)` });
+
+            try {
+                const binaryString = atob(bestImg.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+                postMessage({ type: 'image', id, blob: new Blob([bytes], { type: bestImg.mime }) });
+                return;
+            } catch(e) {
+                postMessage({ type: 'log_cot', id, text: `[Error] Base64 decode failed: ${e.message}` });
+            }
+        }
+
+        const parts = data.candidates?.[0]?.content?.parts;
+        if (parts) {
+            const urlPart = parts.find(p => p.url);
+            if (urlPart) {
+                fetch(urlPart.url).then(r => r.blob()).then(blob => postMessage({ type: 'image', id, blob: blob })).catch(() => postMessage({ type: 'error', id, msg: "ImgURL Fail" }));
+                return;
+            }
+        }
+
+        if (finishReason && finishReason !== "STOP" && finishReason !== "MAX_TOKENS" && finishReason !== undefined) {
+             postMessage({ type: 'error', id, msg: `Stop: ${finishReason}` });
+             return;
+        }
+        
+        postMessage({ type: 'stream_done_no_image', id });
+    }
+
+    self.onmessage = function(e) {
+        const { type, id, config } = e.data;
+        if (type === 'try_abort') {
+            if (self.currentController) self.currentController.abort();
+            postMessage({ type: 'aborted', id });
+            return;
+        }
+        if (type === 'start') {
+            if (config.provider === 'banana') runBanana(id, config);
+            else runLiaobots(id, config);
+        }
+    };
+</script>
+
+<script>
+// 主线程 Script
+const workerBlob = new Blob([document.getElementById('worker-code').textContent], { type: "text/javascript" });
+const workerUrl = URL.createObjectURL(workerBlob);
+
+const STATE = { 
+    dirHandle: null, 
+    fileCache: new Map(), // 文件句柄缓存
+    images: [], pool: new Map(), taskId: 0, 
+    successCount: 0, targetCount: 0, maxRequests: 0, maxConc: 3, 
+    ignoredCount: 0, isRunning: false, isStopping: false,
+    sessionStats: { totalRequests: 0, generatedImages: 0, errors: 0, midwayFailures: 0, outputFiles: [] }
+};
+
+const SpeedMonitor = {
+    samples: [],
+    windowSize: 5000, 
+    addBytes(bytes) { this.samples.push({ t: Date.now(), b: bytes }); this.prune(); },
+    prune() { const now = Date.now(); const cutoff = now - this.windowSize; while(this.samples.length > 0 && this.samples[0].t < cutoff) { this.samples.shift(); } },
+    getSpeed() {
+        this.prune(); 
+        if (this.samples.length === 0) return 0;
+        const now = Date.now();
+        const startTime = this.samples[0].t;
+        let durationSeconds = (now - startTime) / 1000;
+        if (durationSeconds <= 0.1) durationSeconds = 0.1; 
+        const totalBytes = this.samples.reduce((acc, cur) => acc + cur.b, 0);
+        return totalBytes / durationSeconds;
+    },
+    reset() { this.samples = []; }
+};
+
+/* ================== Chart Manager (自适应刻度 + 延迟启动) ================== */
+const ChartManager = {
+    canvas: null, ctx: null,
+    historyData: [], // {t: relativeSeconds, v: speedBytes}
+    startTime: 0,
+    initialized: false,
+    status: 'idle', // idle, waiting_for_data, running
+
+    init() {
+        this.canvas = document.getElementById('speedChart');
+        if(!this.canvas) return;
+        this.ctx = this.canvas.getContext('2d');
+        this.initialized = true;
+        
+        window.addEventListener('resize', () => this.resize());
+        this.resize();
+    },
+
+    resize() {
+        if(!this.initialized) return;
+        const rect = this.canvas.parentElement.getBoundingClientRect();
+        this.canvas.width = rect.width;
+        this.canvas.height = rect.height;
+        if(this.status !== 'running') {
+            this.ctx.fillStyle = '#1a1a1a';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            if(this.status === 'waiting_for_data') this.drawEmpty("等待数据传输...");
+        } else {
+            this.draw();
+        }
+    },
+
+    startListening() {
+        if(!this.initialized) this.init();
+        this.status = 'waiting_for_data';
+        this.historyData = [];
+        this.ctx.fillStyle = '#1a1a1a';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.drawEmpty("等待数据传输...");
+        document.getElementById('chartInfo').innerText = "Waiting...";
+    },
+
+    drawEmpty(msg) {
+        if(!this.ctx) return;
+        this.ctx.fillStyle = '#666';
+        this.ctx.font = '12px Consolas';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(msg, this.canvas.width / 2, this.canvas.height / 2);
+    },
+
+    update(currentSpeed) {
+        if(!STATE.isRunning && !STATE.isStopping) return;
+        
+        // 只有当速度大于0时才真正开始绘制曲线（设置T=0起点）
+        if (this.status === 'waiting_for_data') {
+            if (currentSpeed > 0) {
+                this.status = 'running';
+                this.startTime = Date.now();
+                this.historyData.push({t: 0, v: currentSpeed});
+            } else {
+                return; // 还在等待第一字节
+            }
+        }
+        
+        if (this.status === 'running') {
+            const now = Date.now();
+            const relTime = (now - this.startTime) / 1000;
+            
+            if (this.historyData.length > 0) {
+                const last = this.historyData[this.historyData.length - 1];
+                if (relTime - last.t < 0.2) return; // 降低采样率
+            }
+            
+            this.historyData.push({t: relTime, v: currentSpeed});
+            this.draw();
+            
+            const speedStr = this.fmtSpeed(currentSpeed);
+            const maxV = this.historyData.reduce((p, c) => Math.max(p, c.v), 0);
+            const maxStr = this.fmtSpeed(maxV);
+            document.getElementById('chartInfo').innerHTML = `Time: ${relTime.toFixed(0)}s<br>Cur: ${speedStr}<br>Max: ${maxStr}`;
+        }
+    },
+
+    fmtSpeed(bytes) {
+        if(bytes < 1024) return bytes.toFixed(0) + ' B/s';
+        if(bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB/s';
+        return (bytes / (1024*1024)).toFixed(1) + ' MB/s';
+    },
+
+    draw() {
+        if(!this.ctx) return;
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const ctx = this.ctx;
+        const data = this.historyData;
+
+        // 清空背景
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, w, h);
+
+        if (data.length < 1) return;
+
+        // 1. 计算自适应量程 (Max Value)
+        let maxVal = 0;
+        let maxTime = data[data.length - 1].t;
+        if(maxTime < 10) maxTime = 10; 
+
+        for(let d of data) if(d.v > maxVal) maxVal = d.v;
+        // 最小量程 100KB/s，防止噪音
+        if(maxVal < 102400) maxVal = 102400; 
+        
+        // 向上取整量程，让刻度好看一点
+        // 比如 maxVal 是 2.3MB，刻度设为 2.5MB 或 3.0MB
+        const magnitude = Math.pow(10, Math.floor(Math.log10(maxVal)));
+        maxVal = Math.ceil(maxVal / (magnitude/2)) * (magnitude/2);
+
+        const padding = 5;
+        const leftPadding = 60; // 给文字留空间
+        const graphW = w - leftPadding;
+        const graphH = h - padding * 2;
+        
+        // 2. 绘制网格与刻度
+        ctx.strokeStyle = '#2a2a2a';
+        ctx.lineWidth = 1;
+        ctx.fillStyle = '#666';
+        ctx.font = '10px Consolas';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        
+        const steps = 4; // 几条横线
+        for(let i=0; i<=steps; i++) {
+            const ratio = i / steps;
+            const y = h - padding - ratio * graphH;
+            const val = maxVal * ratio;
+            
+            // 网格线
+            ctx.beginPath();
+            ctx.moveTo(leftPadding, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+
+            // 刻度文字
+            if (i > 0) { // 不画0刻度
+                ctx.fillText(this.fmtSpeed(val), leftPadding - 5, y);
+            }
+        }
+
+        // 3. 绘制曲线
+        if (data.length < 2) return;
+
+        ctx.beginPath();
+        ctx.strokeStyle = '#00e676';
+        ctx.lineWidth = 2;
+        
+        const getX = (t) => leftPadding + (t / maxTime) * graphW;
+        const getY = (v) => h - padding - (v / maxVal) * graphH;
+
+        ctx.moveTo(getX(data[0].t), getY(data[0].v));
+
+        for(let i=1; i<data.length; i++) {
+            ctx.lineTo(getX(data[i].t), getY(data[i].v));
+        }
+        ctx.stroke();
+
+        // 4. 填充下方渐变
+        ctx.lineTo(getX(data[data.length-1].t), h);
+        ctx.lineTo(leftPadding, h);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, 'rgba(0, 230, 118, 0.2)');
+        grad.addColorStop(1, 'rgba(0, 230, 118, 0)');
+        ctx.fillStyle = grad;
+        ctx.fill();
+    }
+};
+// 初始化
+window.addEventListener('load', () => ChartManager.init());
+
+const DOM = {
+    grid: document.getElementById('taskGrid'),
+    log: document.getElementById('logArea'),
+    provider: document.getElementById('apiProvider'),
+    keyLiao: document.getElementById('apiKey-liaobots'),
+    keyBanana: document.getElementById('apiKey-banana'),
+    prompt: document.getElementById('prompt'),
+    conc: document.getElementById('concurrency'),
+    target: document.getElementById('targetCount'),
+    maxReq: document.getElementById('maxRequests'),
+    comp: document.getElementById('compressionRate'),
+    arLiao: document.getElementById('ar-liao'),
+    sizeLiao: document.getElementById('size-liao'),
+    urlBanana: document.getElementById('baseUrl-banana'),
+    modelBanana: document.getElementById('model-banana'),
+    seedBanana: document.getElementById('seed-banana'),
+    sizeBanana: document.getElementById('size-banana'),
+    arBanana: document.getElementById('ar-banana'),
+    enablePush: document.getElementById('enablePush'), // PushPlus Checkbox
+    btns: { start: document.getElementById('btnStart'), stop: document.getElementById('btnStop') },
+    stat: { main: document.getElementById('statMain'), sub: document.getElementById('statSub') }
+};
+
+function toggleProviderUI() {
+    const p = DOM.provider.value;
+    document.getElementById('group-liaobots').classList.remove('active');
+    document.getElementById('group-banana').classList.remove('active');
+    if (p === 'liaobots') document.getElementById('group-liaobots').classList.add('active');
+    else document.getElementById('group-banana').classList.add('active');
+    saveConfig(); 
+}
+
+const CONFIG_KEYS = [
+    'apiProvider', 'apiKey-liaobots', 'apiKey-banana', 'prompt', 'concurrency', 'targetCount', 'maxRequests', 'compressionRate',
+    'ar-liao', 'size-liao', 'baseUrl-banana', 'model-banana', 'seed-banana', 'size-banana', 'ar-banana', 'enablePush'
+];
+
+function loadConfig() {
+    CONFIG_KEYS.forEach(key => {
+        const val = localStorage.getItem('gemini_tool_' + key);
+        const el = document.getElementById(key);
+        if(el && val !== null) {
+            if (el.type === 'checkbox') el.checked = (val === 'true');
+            else el.value = val;
+        }
+    });
+    toggleProviderUI();
+    STATE.maxConc = parseInt(DOM.conc.value) || 3;
+}
+function saveConfig() {
+    CONFIG_KEYS.forEach(key => {
+        const el = document.getElementById(key);
+        if(el) {
+            const val = el.type === 'checkbox' ? el.checked : el.value;
+            localStorage.setItem('gemini_tool_' + key, val);
+        }
+    });
+}
+DOM.conc.addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    if(val > 0) { STATE.maxConc = val; if(STATE.isRunning && !STATE.isStopping) scheduler.loop(); }
+});
+CONFIG_KEYS.forEach(k => { const el = document.getElementById(k); if(el) el.addEventListener('change', saveConfig); });
+window.addEventListener('DOMContentLoaded', loadConfig);
+
+function log(msg, cls='c-sys') {
+    const div = document.createElement('div');
+    div.className = `log-line ${cls}`;
+    div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    DOM.log.appendChild(div);
+    DOM.log.scrollTop = DOM.log.scrollHeight;
+}
+function formatSize(bytes) {
+    if(bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+/* ================== PushPlus 推送功能 ================== */
+async function sendPushPlus(success, errors) {
+    const token = ''; // 硬编码 Token
+    const title = 'AI绘图任务完成';
+    const content = `任务已结束。\n成功生成: ${success} 张\n失败/错误: ${errors} 次\n时间: ${new Date().toLocaleString()}`;
+    
+    log("正在发送 PushPlus 通知...", "c-sys");
+    
+    try {
+        await fetch('http://www.pushplus.plus/send', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                token: token,
+                title: title,
+                content: content
+            })
+        });
+        log('PushPlus 推送发送成功', 'c-suc');
+    } catch (e) {
+        try {
+             const url = `http://www.pushplus.plus/send?token=${token}&title=${encodeURIComponent(title)}&content=${encodeURIComponent(content)}`;
+             await fetch(url);
+             log('PushPlus 推送发送成功 (GET)', 'c-suc');
+        } catch(e2) {
+             log('PushPlus 推送失败: ' + e2.message, 'c-err');
+        }
+    }
+}
+/* ================== Diff 工具模块 ================== */
+const DiffHelper = {
+    THRESHOLD: 0.5, 
+    tokenize(text) {
+        if (!text) return [];
+        return text.match(/[a-zA-Z0-9_]+|[\u4e00-\u9fa5]|\s+|[^\w\u4e00-\u9fa5\s]/g) || [];
+    },
+    compute(oldText, newText) {
+        const oldArr = this.tokenize(oldText);
+        const newArr = this.tokenize(newText);
+        const N = oldArr.length;
+        const M = newArr.length;
+        if (N === 0 && M === 0) return null;
+        const lcsMatrix = Array(N + 1).fill(0).map(() => Array(M + 1).fill(0));
+        for (let i = 1; i <= N; i++) {
+            for (let j = 1; j <= M; j++) {
+                if (oldArr[i - 1] === newArr[j - 1]) lcsMatrix[i][j] = lcsMatrix[i - 1][j - 1] + 1;
+                else lcsMatrix[i][j] = Math.max(lcsMatrix[i - 1][j], lcsMatrix[i][j - 1]);
+            }
+        }
+        const commonLength = lcsMatrix[N][M];
+        const maxLen = Math.max(N, M);
+        const similarity = maxLen === 0 ? 1 : (commonLength / maxLen);
+        if (similarity < this.THRESHOLD) return null;
+        let i = N, j = M;
+        const result = [];
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && oldArr[i - 1] === newArr[j - 1]) {
+                result.unshift({ value: newArr[j - 1], added: false, removed: false });
+                i--; j--;
+            } else if (j > 0 && (i === 0 || lcsMatrix[i][j - 1] >= lcsMatrix[i - 1][j])) {
+                result.unshift({ value: newArr[j - 1], added: true, removed: false });
+                j--;
+            } else if (i > 0 && (j === 0 || lcsMatrix[i][j - 1] < lcsMatrix[i - 1][j])) {
+                i--;
+            }
+        }
+        return result;
+    },
+    escapeHtml(text) {
+        if (!text) return '';
+        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+        return text.replace(/[&<>"']/g, m => map[m]);
+    },
+    getDiffHtml(oldStr, newStr) {
+        if (!oldStr || oldStr === newStr) return this.escapeHtml(newStr);
+        const diffs = this.compute(oldStr, newStr);
+        if (!diffs) return this.escapeHtml(newStr);
+        let html = '';
+        let currentAdded = false;
+        let buffer = '';
+        diffs.forEach(part => {
+            if (part.added !== currentAdded) {
+                if (buffer) {
+                    const safeVal = this.escapeHtml(buffer);
+                    html += currentAdded ? `<span class="h-diff-ins">${safeVal}</span>` : safeVal;
+                }
+                buffer = part.value;
+                currentAdded = part.added;
+            } else {
+                buffer += part.value;
+            }
+        });
+        if (buffer) {
+            const safeVal = this.escapeHtml(buffer);
+            html += currentAdded ? `<span class="h-diff-ins">${safeVal}</span>` : safeVal;
+        }
+        return html;
+    }
+};
+
+/* ================== 历史记录管理模块 ================== */
+const HistoryManager = {
+    data: [], 
+    fileName: 'gemini_history_log_v2.json',
+    filteredData: [],
+    renderedCount: 0,
+    BATCH_SIZE: 20, 
+    activeTab: 'all', 
+    
+    init() {
+        const listEl = document.getElementById('historyList');
+        if (listEl) {
+            listEl.addEventListener('scroll', () => {
+                const { scrollTop, scrollHeight, clientHeight } = listEl;
+                if (scrollTop + clientHeight >= scrollHeight - 100) {
+                    this.renderNextBatch();
+                }
+            });
+        }
+    },
+
+    show() { 
+        document.getElementById('historyModal').style.display = 'flex'; 
+        this.filterAndRender(); 
+    },
+    hide() { document.getElementById('historyModal').style.display = 'none'; },
+    
+    switchTab(tab) {
+        this.activeTab = tab;
+        document.getElementById('tabAll').className = tab === 'all' ? 'tab-btn active' : 'tab-btn';
+        document.getElementById('tabFeat').className = tab === 'featured' ? 'tab-btn active' : 'tab-btn';
+        this.filterAndRender();
+    },
+
+    toggleFeatured(index, btn) {
+        const item = this.filteredData[index];
+        if(!item) return;
+        item.isFeatured = !item.isFeatured;
+        btn.innerText = item.isFeatured ? "★ 已精选" : "☆ 设为精选";
+        btn.classList.toggle('active', item.isFeatured);
+        this.saveToFile();
+        if(this.activeTab === 'featured' && !item.isFeatured) {
+            this.filterAndRender(); 
+        }
+    },
+    
+    toggleHidden(index, btn) {
+        const item = this.filteredData[index];
+        if(!item) return;
+        
+        item.isHidden = !item.isHidden;
+        this.saveToFile();
+
+        const row = btn.closest('.history-item');
+        const showHidden = document.getElementById('historyShowHidden').checked;
+
+        if (showHidden) {
+            if (item.isHidden) {
+                row.classList.add('is-hidden');
+                btn.innerText = '👁️ 取消隐藏';
+            } else {
+                row.classList.remove('is-hidden');
+                btn.innerText = '🙈 隐藏';
+            }
+        } else {
+            if (item.isHidden) {
+                row.remove();
+            } else {
+                this.filterAndRender();
+            }
+        }
+    },
+
+    copyPrompt(text, btnElement) {
+        navigator.clipboard.writeText(text).then(() => {
+            const originalText = btnElement.innerText;
+            btnElement.innerText = "已复制"; btnElement.style.color = "#00e676";
+            setTimeout(() => { btnElement.innerText = originalText; btnElement.style.color = ""; }, 1000);
+        });
+    },
+
+    startEdit(index) {
+        document.getElementById(`stats-view-${index}`).style.display = 'none';
+        document.getElementById(`stats-edit-${index}`).style.display = 'flex';
+    },
+
+    cancelEdit(index) {
+        document.getElementById(`stats-view-${index}`).style.display = 'flex';
+        document.getElementById(`stats-edit-${index}`).style.display = 'none';
+    },
+
+    async saveEdit(index) {
+        const total = parseInt(document.getElementById(`edit-total-${index}`).value) || 0;
+        const good = parseInt(document.getElementById(`edit-good-${index}`).value) || 0;
+        const filesRaw = document.getElementById(`edit-files-${index}`).value;
+        const newPrompt = document.getElementById(`edit-prompt-${index}`).value; 
+        
+        let files = [];
+        try {
+            files = JSON.parse(filesRaw);
+            if (!Array.isArray(files)) throw new Error("Not array");
+        } catch(e) {
+            alert("文件列表格式错误，必须是有效的 JSON 字符串数组");
+            return;
+        }
+
+        const item = this.filteredData[index];
+        item.totalRequests = total;
+        item.generatedCount = good;
+        item.outputFiles = files;
+        item.prompt = newPrompt; 
+
+        await this.saveToFile(); 
+        log("✏️ 历史记录已更新并保存", "c-suc"); 
+        this.filterAndRender(); 
+    },
+    
+    deleteItem(index) {
+        if(!confirm("⚠️ 确定要删除这条历史记录吗？")) return;
+        const item = this.filteredData[index];
+        const realIndex = this.data.indexOf(item);
+        if(realIndex > -1) this.data.splice(realIndex, 1);
+        this.saveToFile();
+        this.filterAndRender();
+    },
+
+    filterAndRender() {
+        const search = document.getElementById('historySearch').value.toLowerCase();
+        const showHidden = document.getElementById('historyShowHidden').checked;
+
+        this.filteredData = this.data
+            .filter(item => {
+                const searchMatch = item.prompt.toLowerCase().includes(search);
+                const tabMatch = this.activeTab === 'all' ? true : item.isFeatured;
+                const hiddenMatch = showHidden ? true : !item.isHidden;
+                return searchMatch && tabMatch && hiddenMatch;
+            })
+            .sort((a, b) => new Date(b.lastUsed) - new Date(a.lastUsed));
+        
+        this.renderedCount = 0;
+        document.getElementById('historyList').innerHTML = ''; 
+        document.getElementById('historyList').scrollTop = 0;
+        
+        if (this.filteredData.length === 0) {
+            document.getElementById('historyList').innerHTML = '<div style="text-align:center; padding:20px; color:#666;">暂无记录或无匹配项</div>';
+            return;
+        }
+        this.renderNextBatch();
+    },
+
+        async renderNextBatch() {
+        if (this.renderedCount >= this.filteredData.length) return;
+
+        const container = document.getElementById('historyList');
+        const fragment = document.createDocumentFragment();
+        const nextBatchLimit = Math.min(this.renderedCount + this.BATCH_SIZE, this.filteredData.length);
+
+        for (let i = this.renderedCount; i < nextBatchLimit; i++) {
+            const item = this.filteredData[i];
+            const el = document.createElement('div'); 
+            
+            el.className = 'history-item';
+            if (item.isHidden) el.classList.add('is-hidden');
+            
+            const n = item.totalRequests;
+            const count = item.generatedCount;
+            const p = n > 0 ? (count / n) : 0;
+            const rate = (p * 100).toFixed(1);
+            
+            let moe = 0;
+            if(n > 0) { moe = 1.96 * Math.sqrt((p * (1 - p)) / n); }
+            const confPercent = (moe * 100).toFixed(1);
+            const confColor = moe > 0.3 ? '#777' : (moe < 0.1 ? '#00e676' : '#40c4ff');
+
+            const BASE_PRICE = 0.114;
+            const totalCost = n * BASE_PRICE;
+            let avgCostPerImg = count > 0 ? totalCost / count : 0;
+            const costDisplay = count > 0 ? `￥${avgCostPerImg.toFixed(2)}/张` : `N/A`;
+            
+            const imgRefNames = item.refImages && item.refImages.length > 0 ? 
+                `<span style="font-weight:bold; color:#ccc;">📷 参考图 (${item.refImages.length}):</span> ${item.refImages.join(', ')}` : 
+                '<span style="opacity:0.5">无参考图</span>';
+            
+            const safePrompt = item.prompt.replace(/"/g, '&quot;'); 
+            let displayPromptHtml = DiffHelper.escapeHtml(item.prompt); 
+
+            if (i + 1 < this.filteredData.length) {
+                const prevItem = this.filteredData[i + 1];
+                displayPromptHtml = DiffHelper.getDiffHtml(prevItem.prompt, item.prompt);
+            }
+            
+            let imgsHtml = '';
+            if (item.outputFiles && item.outputFiles.length > 0) {
+                imgsHtml = `<div class="h-out-grid">`;
+                const renderLimit = 8;
+                const filesToShow = item.outputFiles.slice(0, renderLimit);
+                for(let idx=0; idx<filesToShow.length; idx++) {
+                    const fileName = filesToShow[idx];
+                    const uniqueId = `thumb-${i}-${idx}`;
+                    imgsHtml += `<div class="h-out-item" id="${uniqueId}"><div class="h-out-txt">...</div></div>`;
+                    this.loadImageAsync(fileName, uniqueId);
+                }
+                if (item.outputFiles.length > renderLimit) imgsHtml += `<div class="h-out-item"><div class="h-out-txt">+${item.outputFiles.length - renderLimit}</div></div>`;
+                imgsHtml += `</div>`;
+            }
+            
+            const leftCol = `
+                <div class="h-col-left">
+                    <div class="h-prompt-header">
+                        <span style="font-weight:bold; color:#888; font-size:12px;">PROMPT</span>
+                        <div style="display:flex; gap:5px;">
+                            <button class="h-feat-btn ${item.isFeatured ? 'active' : ''}" onclick="HistoryManager.toggleFeatured(${i}, this)">${item.isFeatured ? '★ 已精选' : '☆ 设为精选'}</button>
+                            <button class="h-copy-btn" onclick="HistoryManager.startEdit(${i})">✏️ 修改</button>
+                            <button class="h-copy-btn" onclick="HistoryManager.toggleHidden(${i}, this)">${item.isHidden ? '👁️ 取消隐藏' : '🙈 隐藏'}</button>
+                            <button class="h-copy-btn h-del-btn" onclick="HistoryManager.deleteItem(${i})">🗑️ 删除</button>
+                            <button class="h-copy-btn" onclick="HistoryManager.copyPrompt(this.dataset.prompt, this)" data-prompt="${safePrompt}">📋 复制</button>
+                        </div>
+                    </div>
+                    <div class="h-prompt">${displayPromptHtml}</div>
+                </div>
+            `;
+
+            const rightCol = `
+                <div class="h-col-right">
+                    <div id="stats-edit-${i}" class="edit-panel">
+                         <div class="edit-row"><label>Total</label><input type="number" id="edit-total-${i}" value="${item.totalRequests}"></div>
+                         <div class="edit-row"><label>Success</label><input type="number" id="edit-good-${i}" value="${item.generatedCount}"></div>
+                         <div class="edit-row" style="flex-direction:column; align-items:start;">
+                            <label style="width:100%">提示词 (Prompt)</label>
+                            <textarea id="edit-prompt-${i}" style="height:80px; font-family:inherit;">${safePrompt}</textarea>
+                         </div>
+                         <div class="edit-row" style="flex-direction:column; align-items:start;"><label style="width:100%">Files (JSON Array)</label><textarea id="edit-files-${i}">${JSON.stringify(item.outputFiles || [])}</textarea></div>
+                         <div class="btn-group">
+                            <button class="btn-primary" onclick="HistoryManager.saveEdit(${i})">保存</button>
+                            <button class="btn-danger" onclick="HistoryManager.cancelEdit(${i})">取消</button>
+                         </div>
+                    </div>
+
+                    <div id="stats-view-${i}" class="h-stats-row">
+                        <span class="stat-tag c-money" title="总花费估算">💰 总:￥${totalCost.toFixed(2)} | 均:${costDisplay}</span>
+                        <span style="color:#444">|</span>
+                        <span class="stat-tag c-rate" title="成功率">📊 ${rate}%</span>
+                        <span style="color:#444">|</span>
+                        <span class="stat-tag" style="color:${confColor}" title="置信区间误差">🎯 ±${confPercent}%</span>
+                        <span style="color:#444">|</span>
+                        <span class="stat-tag c-count" title="成功数 / 总请求数">🔢 ${count} / ${n}</span>
+                        <span class="stat-tag c-time">🕒 ${new Date(item.lastUsed).toLocaleString()}</span>
+                    </div>
+                    <div class="h-imgs-ref">${imgRefNames}</div>
+                    ${imgsHtml}
+                </div>
+            `;
+
+            el.innerHTML = leftCol + rightCol;
+            fragment.appendChild(el);
+        }
+        
+        container.appendChild(fragment);
+        this.renderedCount = nextBatchLimit;
+    },
+    
+    async loadImageAsync(fileName, elemId) {
+        if (!STATE.dirHandle) return;
+        try {
+            let h;
+            if (STATE.fileCache.has(fileName)) {
+                h = STATE.fileCache.get(fileName);
+            } else {
+                h = await STATE.dirHandle.getFileHandle(fileName);
+            }
+            const f = await h.getFile();
+            const src = URL.createObjectURL(f);
+            const el = document.getElementById(elemId);
+            if(el) {
+                el.innerHTML = `<img src="${src}" onclick="window.open(this.src)">`;
+                el.title = fileName;
+            }
+        } catch(e) {
+             const el = document.getElementById(elemId);
+             if(el) el.innerHTML = `<div class="h-out-txt">FILE</div>`;
+        }
+    },
+
+    async update(prompt, images, sessionStats) {
+        await this.loadFromFile(true);
+        const imgNameList = images.map(i => i.name).sort();
+        let record = this.data.find(r => {
+            if (r.prompt !== prompt) return false;
+            const rRef = r.refImages || [];
+            if (rRef.length !== imgNameList.length) return false;
+            const rRefSorted = [...rRef].sort();
+            return rRefSorted.every((val, index) => val === imgNameList[index]);
+        });
+        const newFiles = sessionStats.outputFiles || [];
+        if (record) {
+            record.totalRequests += sessionStats.totalRequests; 
+            record.generatedCount += sessionStats.generatedImages;
+            record.lastUsed = new Date().toISOString();
+            if (!record.outputFiles) record.outputFiles = [];
+            record.outputFiles = [...newFiles, ...record.outputFiles]; 
+            if(record.outputFiles.length > 50) record.outputFiles.length = 50; 
+            if(record.isFeatured === undefined) record.isFeatured = false;
+        } else {
+            record = { 
+                prompt: prompt, 
+                refImages: imgNameList, 
+                totalRequests: sessionStats.totalRequests, 
+                generatedCount: sessionStats.generatedImages, 
+                lastUsed: new Date().toISOString(), 
+                outputFiles: newFiles,
+                isFeatured: false,
+                isHidden: false
+            };
+            this.data.push(record);
+        }
+        await this.saveToFile();
+    },
+    
+    async loadFromFile() {
+        if (!STATE.dirHandle) return;
+        try { const fh = await STATE.dirHandle.getFileHandle(this.fileName, { create: false }); const file = await fh.getFile(); const text = await file.text(); this.data = JSON.parse(text); log(`已加载 ${this.data.length} 条历史记录`, 'c-suc'); } catch (e) { if (e.name === 'NotFoundError') log("未发现历史记录文件，将自动创建", 'c-sys'); }
+    },
+    async saveToFile() {
+        if (!STATE.dirHandle) return;
+        try { 
+            const hasPerm = await verifyPermission(STATE.dirHandle, true);
+            if (!hasPerm) { log("历史记录写入权限丢失", "c-err"); return; }
+            const jsonStr = JSON.stringify(this.data, null, 2); 
+            const fh = await STATE.dirHandle.getFileHandle(this.fileName, { create: true }); 
+            const w = await fh.createWritable(); 
+            await w.write(jsonStr); await w.close(); 
+        } catch (e) { log(`保存历史记录失败: ${e.message}`, 'c-err'); }
+    }
+};
+HistoryManager.init();
+
+async function verifyPermission(fileHandle, readWrite) {
+    const options = {}; if (readWrite) { options.mode = 'readwrite'; }
+    if ((await fileHandle.queryPermission(options)) === 'granted') { return true; }
+    if ((await fileHandle.requestPermission(options)) === 'granted') { return true; }
+    return false;
+}
+
+async function indexSubfolders(dirHandle) {
+    const statusEl = document.getElementById('dirStatus');
+    const originalText = statusEl.innerText;
+    statusEl.innerText = originalText + " ⏳正在索引子文件夹...";
+    STATE.fileCache.clear();
+    async function traverse(currentHandle) {
+        for await (const entry of currentHandle.values()) {
+            if (entry.kind === 'file') {
+                STATE.fileCache.set(entry.name, entry);
+            } else if (entry.kind === 'directory') {
+                await traverse(entry);
+            }
+        }
+    }
+    try {
+        await traverse(dirHandle);
+        statusEl.innerText = `✅ ${dirHandle.name} (已索引 ${STATE.fileCache.size} 文件)`;
+        log(`文件索引完成，共发现 ${STATE.fileCache.size} 个文件`, "c-sys");
+    } catch (e) {
+        console.error(e);
+        statusEl.innerText = originalText + " (索引失败)";
+    }
+}
+
+async function selectSaveDir() {
+    try { 
+        STATE.dirHandle = await window.showDirectoryPicker({ mode: "readwrite" }); 
+        document.getElementById('dirStatus').innerText = "✅ " + STATE.dirHandle.name; 
+        document.getElementById('dirStatus').style.color = "#4caf50"; 
+        log("文件夹已授权", "c-suc"); 
+        
+        await HistoryManager.loadFromFile();
+        indexSubfolders(STATE.dirHandle);
+        
+    } catch(e) { log("文件夹选择取消", "c-warn"); }
+}
+
+async function saveFile(name, blob) {
+    if(!STATE.dirHandle) return false;
+    try { 
+        const fh = await STATE.dirHandle.getFileHandle(name, {create:true}); 
+        const w = await fh.createWritable(); 
+        await w.write(blob); 
+        await w.close(); 
+        STATE.fileCache.set(name, fh);
+        return true; 
+    } catch(e) { return false; }
+}
+
+async function processImage(file, quality) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let width = img.width; let height = img.height; 
+                let MAX_SIZE = 99999;
+                
+                if (quality < 1) { 
+                    if (quality >= 0.9) MAX_SIZE = 3840;      
+                    else if (quality >= 0.8) MAX_SIZE = 2048; 
+                    else MAX_SIZE = 1280;                     
+                }
+                
+                if (width > height) { if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; } } 
+                else { if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; } }
+                canvas.width = width; canvas.height = height;
+                const ctx = canvas.getContext('2d'); 
+                ctx.drawImage(img, 0, 0, width, height);
+                const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                resolve({ name: file.name, src: dataUrl, mimeType: 'image/jpeg', base64: dataUrl.split(',')[1], origSize: file.size });
+            }; img.src = e.target.result;
+        }; reader.readAsDataURL(file);
+    });
+}
+
+const scheduler = {
+    statusInterval: null,
+    lastSpawnTime: 0, 
+    waitingTimer: null, 
+    
+    start() {
+        if(STATE.isRunning) return;
+        saveConfig();
+        const currentProvider = DOM.provider.value;
+        const currentKey = currentProvider === 'banana' ? DOM.keyBanana.value.trim() : DOM.keyLiao.value.trim();
+        if(!currentKey) return alert(`请填写 ${currentProvider === 'banana' ? 'SillyDream' : 'Liaobots'} 的 API Key`);
+        if(!STATE.dirHandle && !confirm("未选择保存目录，图片将不会保存。继续？")) return;
+        
+        STATE.targetCount = parseInt(DOM.target.value) || 1;
+        STATE.maxRequests = parseInt(DOM.maxReq.value) || 0; 
+        STATE.maxConc = parseInt(DOM.conc.value) || 1;
+        STATE.successCount = 0; STATE.taskId = 0; STATE.ignoredCount = 0;
+        STATE.isRunning = true; STATE.isStopping = false;
+        STATE.sessionStats = { totalRequests: 0, generatedImages: 0, errors: 0, midwayFailures: 0, outputFiles: [] };
+        
+        DOM.grid.innerHTML = ''; DOM.btns.start.disabled = true; DOM.btns.stop.disabled = false; DOM.btns.stop.innerText = "停止"; DOM.btns.stop.className = "btn-danger";
+        
+        SpeedMonitor.reset();
+        ChartManager.startListening(); // 进入等待数据状态
+        
+        this.lastSpawnTime = 0;
+        if (this.waitingTimer) { clearTimeout(this.waitingTimer); this.waitingTimer = null; }
+        
+        log(`任务启动 [${currentProvider === 'banana' ? "SillyDream" : "Liaobots"}]... 并发:${STATE.maxConc}, 目标:${STATE.targetCount}`, "c-sys");
+        this.updateStats(); 
+        
+        if(this.statusInterval) clearInterval(this.statusInterval);
+        this.statusInterval = setInterval(() => this.updateStats(), 1000);
+        
+        this.loop();
+    },
+    stopGracefully() {
+        STATE.isStopping = true; DOM.btns.stop.innerText = "正在停止..."; DOM.btns.stop.disabled = true; 
+        log("收到停止指令，等待当前任务完成...", "c-warn");
+        if (this.waitingTimer) { clearTimeout(this.waitingTimer); this.waitingTimer = null; }
+        this.loop();
+    },
+    updateStats() {
+        const activeTasks = Array.from(STATE.pool.values());
+        const downloadingTasks = activeTasks.filter(t => t.downloadStarted);
+        const waitingCount = activeTasks.length - downloadingTasks.length; 
+        
+        const bigLoaders = activeTasks.filter(t => (t.currentBytes||0) > 102400).length;
+        
+        let downloadInfoStr = "";
+        if (downloadingTasks.length > 0) {
+            const sizes = downloadingTasks.map(t => Math.floor((t.currentBytes || 0) / 10240));
+            downloadInfoStr = `(${sizes.join(',')})`;
+        }
+        
+        const currentSpeed = SpeedMonitor.getSpeed();
+        ChartManager.update(currentSpeed); // 更新图表数据
+        
+        let speedEtaStr = "";
+        if (downloadingTasks.length > 0 || currentSpeed > 0) {
+            const speedVal = Math.floor(currentSpeed / 1024);
+            const speedStr = speedVal + "K"; 
+            speedEtaStr = `${speedStr}`;
+        }
+        
+        const finalSpeedStr = speedEtaStr ? speedEtaStr : "";
+        const titleStr = `✅${STATE.successCount} ⬇️${downloadingTasks.length}${downloadInfoStr}${finalSpeedStr} ⏳${waitingCount} ❌${STATE.sessionStats.errors}`;
+        document.title = titleStr;
+
+        const limitText = STATE.maxRequests > 0 ? ` / ${STATE.maxRequests}` : '';
+        const successText = bigLoaders > 0 ? `${STATE.successCount}[+${bigLoaders}]` : STATE.successCount;
+        DOM.stat.sub.innerText = `成功: ${successText}/${STATE.targetCount} | 尝试: ${STATE.taskId}${limitText}`;
+    },
+    loop() {
+        const activeTasks = Array.from(STATE.pool.values());
+        const bigDownloadingCount = activeTasks.filter(t => (t.currentBytes || 0) > 102400).length;
+        const effectiveSuccessCount = STATE.successCount + bigDownloadingCount;
+
+        const active = STATE.pool.size;
+        const done = effectiveSuccessCount >= STATE.targetCount; 
+        const limitReached = STATE.maxRequests > 0 && (STATE.taskId - STATE.ignoredCount) >= STATE.maxRequests;
+        
+        this.updateStats();
+
+        if (active === 0 && (STATE.isStopping || done || limitReached)) {
+            this.finish();
+            return;
+        }
+        if (STATE.isStopping || done || limitReached) return;
+
+        if (STATE.pool.size < STATE.maxConc && 
+            (STATE.taskId - STATE.ignoredCount) < (STATE.maxRequests || 999999) && 
+            effectiveSuccessCount < STATE.targetCount) { 
+            
+            const now = Date.now();
+            const timeDiff = now - this.lastSpawnTime;
+
+            if (timeDiff >= 5000) {
+                this.spawn();
+                this.loop();
+            } else {
+                if (!this.waitingTimer) {
+                    const waitTime = 5000 - timeDiff;
+                    this.waitingTimer = setTimeout(() => {
+                        this.waitingTimer = null;
+                        this.loop();
+                    }, waitTime);
+                }
+            }
+        }
+    },
+    spawn() {
+        this.lastSpawnTime = Date.now(); 
+        STATE.taskId++;
+        const id = STATE.taskId;
+        const card = document.createElement('div'); card.className = 'task-card s-wait';
+        card.innerHTML = `<div class="t-head"><span>#${id}</span><span id="tm-${id}">0s</span></div><div class="t-stat" id="ts-${id}">准备中...</div><div class="t-img-box" id="ti-${id}"></div><div class="t-info"><span id="tf-l-${id}">Wait</span><span id="tf-r-${id}"></span></div><div class="t-bar-bg"><div class="t-fill" id="tp-${id}"></div></div>`;
+        DOM.grid.prepend(card);
+
+        const ui = {
+            card, stat: card.querySelector(`#ts-${id}`), infoL: card.querySelector(`#tf-l-${id}`), infoR: card.querySelector(`#tf-r-${id}`), fill: card.querySelector(`#tp-${id}`), imgBox: card.querySelector(`#ti-${id}`), timer: card.querySelector(`#tm-${id}`),
+            startTime: Date.now(), timerId: setInterval(() => { ui.timer.innerText = ((Date.now() - ui.startTime)/1000).toFixed(1) + 's'; }, 200)
+        };
+
+        const provider = DOM.provider.value;
+        const config = {
+            provider: provider,
+            apiKey: provider === 'banana' ? DOM.keyBanana.value.trim() : DOM.keyLiao.value.trim(),
+            prompt: DOM.prompt.value,
+            images: STATE.images, 
+        };
+
+        if (provider === 'liaobots') {
+            config.aspectRatio = DOM.arLiao.value;
+            config.imageSize = DOM.sizeLiao.value;
+        } else {
+            config.baseUrl = DOM.urlBanana.value.replace(/\/$/, '');
+            config.model = DOM.modelBanana.value;
+            config.seed = parseInt(DOM.seedBanana.value);
+            config.aspectRatio = DOM.arBanana.value;
+            config.imageSize = DOM.sizeBanana.value;
+        }
+
+        const worker = new Worker(workerUrl);
+        STATE.pool.set(id, { worker, ui, downloadStarted: false, currentBytes: 0, lastBytes: 0 });
+        this.updateStats(); 
+        worker.onmessage = (e) => this.handleWorkerMsg(id, e.data);
+        worker.postMessage({ type: 'start', id, config });
+    },
+    handleWorkerMsg(id, msg) {
+        const task = STATE.pool.get(id);
+        if(!task) return;
+        const { ui } = task;
+
+        switch(msg.type) {
+            case 'log_cot':
+                log(`[#${id} 思维链/文本] \n${msg.text}`, 'c-cot');
+                break;
+            case 'log_debug':
+                log(`[#${id} Debug] ${msg.msg}`, 'c-debug');
+                break;
+            case 'log_raw_json':
+                log(`[#${id} 报文地图] ${JSON.stringify(msg.json)}`, 'c-debug');
+                break;
+            case 'upload_progress':
+                if (!ui.card.classList.contains('s-up')) { ui.card.className = 'task-card s-up'; ui.stat.innerText = "🔵 上传数据"; }
+                const pct = msg.total ? (msg.loaded/msg.total*100) : 0;
+                ui.fill.style.transform = `scaleX(${pct/100})`;
+                break;
+            case 'download_progress':
+                const delta = msg.loaded - (task.lastBytes || 0);
+                if (delta > 0) SpeedMonitor.addBytes(delta);
+                task.lastBytes = msg.loaded;
+                task.currentBytes = msg.loaded;
+                
+                if (!task.downloadStarted) { 
+                    task.downloadStarted = true; 
+                    this.updateStats(); 
+                }
+                
+                if (!ui.card.classList.contains('s-wait-resp')) { ui.card.className = 'task-card s-wait-resp'; }
+                ui.stat.innerText = "🟣 接收 " + formatSize(msg.loaded);
+                ui.fill.style.transform = `scaleX(0.8)`;
+                
+                this.updateStats();
+                if (msg.loaded > 102400 && msg.loaded - delta <= 102400) {
+                     this.loop(); 
+                }
+                break;
+            case 'image':
+                clearInterval(ui.timerId); STATE.successCount++; STATE.sessionStats.generatedImages++; STATE.sessionStats.totalRequests++;
+                
+                if (msg.isPartial) {
+                    ui.card.className = `task-card s-part`; 
+                    ui.stat.innerText = "✂️ 残缺恢复";
+                    log(`#${id} 传输中断，但成功恢复残缺图片`, "c-warn");
+                } else {
+                    ui.card.className = `task-card s-done`; 
+                    ui.stat.innerText = "✅ 完成";
+                }
+
+                ui.imgBox.innerHTML = `<img src="${URL.createObjectURL(msg.blob)}">`;
+                const fName = `Gemini_${Date.now()}_${id}${msg.isPartial ? '_part' : ''}.png`;
+                saveFile(fName, msg.blob);
+                STATE.sessionStats.outputFiles.push(fName);
+                this.kill(id); this.loop(); 
+                break;
+            case 'error':
+            case 'stream_done_no_image':
+                clearInterval(ui.timerId); 
+                const errStr = String(msg.msg);
+                if (errStr.includes("undefined") || errStr === "undefined") {
+                    STATE.sessionStats.errors++;      
+                    STATE.sessionStats.totalRequests++; 
+                    ui.card.className = 'task-card s-err'; 
+                    ui.stat.innerText = "🔴 Undefined";   
+                    ui.infoR.innerText = "Failed";
+                } 
+                else if (task.currentBytes > 100 * 1024) { 
+                    STATE.successCount++; 
+                    STATE.sessionStats.totalRequests++;
+                    STATE.sessionStats.midwayFailures++;
+                    ui.card.className = 'task-card s-abt'; 
+                    ui.stat.innerText = "📉 视为成功";     
+                    ui.infoR.innerText = ">100KB Fail";
+                }
+                else {
+                    const is429 = msg.msg && msg.msg.includes('429');
+                    const isUpstream500 = msg.msg && msg.msg.includes('500') && (msg.msg.includes('upstream_error') || msg.msg.includes('Empty response from upstream'));
+                    const isIgnorable = is429 || isUpstream500;
+
+                    if (isIgnorable) {
+                        STATE.ignoredCount++;
+                    } else {
+                        STATE.sessionStats.errors++;
+                        STATE.sessionStats.totalRequests++;
+                    }
+                    ui.card.className = isIgnorable ? 'task-card s-ign' : 'task-card s-err';
+                    if(is429) ui.stat.innerText = "🚫 429 跳过";
+                    else if(isUpstream500) ui.stat.innerText = "🚫 Upstream 跳过";
+                    else ui.stat.innerText = "🔴 失败";
+                    ui.infoR.innerText = (msg.msg || "Error").substring(0,15);
+                }
+                if (msg.msg !== "Partial Recovery") { 
+                    log(`#${id} Err: ${msg.msg}`, "c-err");
+                }
+                this.kill(id); this.loop();
+                break;
+        }
+    },
+    kill(id) {
+        const task = STATE.pool.get(id);
+        if(task) { task.worker.terminate(); if(task.ui.timerId) clearInterval(task.ui.timerId); STATE.pool.delete(id); }
+        this.updateStats(); 
+    },
+    
+    finish() {
+        STATE.isRunning = false; DOM.btns.start.disabled = false; DOM.btns.stop.disabled = true; DOM.btns.stop.innerText = "停止";
+        if(this.statusInterval) clearInterval(this.statusInterval);
+        document.title = "任务结束 - AI 绘图工场";
+        
+        const finalGeneratedCount = STATE.sessionStats.generatedImages + STATE.sessionStats.midwayFailures;
+        const finalErrors = STATE.sessionStats.errors;
+        
+        log(`任务结束。成功:${STATE.successCount} (含中途失败:${STATE.sessionStats.midwayFailures}), 错误:${finalErrors}`, "c-suc");
+        
+        if(STATE.sessionStats.totalRequests > 0) {
+            const statsToWrite = { ...STATE.sessionStats, generatedImages: finalGeneratedCount };
+            HistoryManager.update(DOM.prompt.value, STATE.images, statsToWrite);
+        }
+
+        if (DOM.enablePush && DOM.enablePush.checked) {
+            if (STATE.sessionStats.totalRequests > 0) {
+                sendPushPlus(STATE.successCount, finalErrors);
+            }
+        }
+    }
+};
+
+const previewList = document.getElementById('previewList');
+const fileInput = document.getElementById('imgInput');
+fileInput.addEventListener('change', async (e) => {
+    document.getElementById('compressionLog').innerText = "处理中...";
+    for(let f of e.target.files) {
+        try {
+            const processed = await processImage(f, parseFloat(DOM.comp.value)); 
+            STATE.images.push(processed);
+            renderImgs();
+        } catch(err) { console.error(err); }
+    }
+    document.getElementById('compressionLog').innerText = `已就绪 ${STATE.images.length} 张`;
+    e.target.value = '';
+});
+
+function renderImgs() {
+    previewList.innerHTML = '';
+    STATE.images.forEach((img, idx) => {
+        const el = document.createElement('img');
+        el.className = 'preview-thumb';
+        el.src = img.src;
+        el.draggable = true; 
+        
+        el.onclick = () => { 
+            STATE.images.splice(idx,1); 
+            renderImgs(); 
+        };
+
+        el.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', idx);
+            e.dataTransfer.effectAllowed = 'move';
+        });
+
+        el.addEventListener('dragover', (e) => {
+            e.preventDefault(); 
+            e.dataTransfer.dropEffect = 'move';
+        });
+
+        el.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+            if (fromIdx === idx) return;
+
+            const item = STATE.images[fromIdx];
+            STATE.images.splice(fromIdx, 1);
+            STATE.images.splice(idx, 0, item);
+            
+            renderImgs();
+        });
+
+        previewList.appendChild(el);
+    });
+}
+
+(function initResizer() {
+    const resizer = document.getElementById('resizer');
+    const sidebar = document.getElementById('sidebar');
+    const minWidth = 200;
+    const maxWidth = 800;
+
+    if (!resizer || !sidebar) return;
+
+    resizer.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        document.addEventListener('mousemove', resize);
+        document.addEventListener('mouseup', stopResize);
+        resizer.classList.add('active');
+        document.body.style.cursor = 'col-resize';
+    });
+
+    function resize(e) {
+        let newWidth = e.clientX;
+        if (newWidth < minWidth) newWidth = minWidth;
+        if (newWidth > maxWidth) newWidth = maxWidth;
+        sidebar.style.width = newWidth + 'px';
+    }
+
+    function stopResize() {
+        document.removeEventListener('mousemove', resize);
+        document.removeEventListener('mouseup', stopResize);
+        resizer.classList.remove('active');
+        document.body.style.cursor = '';
+    }
+})();
+
+</script>
+</body>
+</html>
