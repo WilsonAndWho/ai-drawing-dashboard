@@ -157,7 +157,7 @@
     <div id="group-banana" class="provider-group">
         <div class="section-title">SillyDream 参数</div>
         <div style="margin-bottom:5px;"><label>SillyDream API Key</label><input type="text" id="apiKey-banana" placeholder="Key..." style="color:#ffcc80;"></div>
-        <div><label>Base URL</label><input type="text" id="baseUrl-banana" value=""></div>
+        <div><label>Base URL</label><input type="text" id="baseUrl-banana" value="http://38.246.249.31:3000"></div>
         <div><label>模型名称</label><input type="text" id="model-banana" value="gemini-3-pro-image-preview"></div>
         <div style="display:flex; gap:5px; margin-top:5px;">
             <div style="flex:1"><label>随机种子 (-1=随机)</label><input type="number" id="seed-banana" value="-1" placeholder="-1"></div>
@@ -417,7 +417,7 @@
             const controller = new AbortController();
             self.currentController = controller;
 
-            const response = await fetch("", {
+            const response = await fetch("https://ai.liaobots.work/v1beta/models/gemini-3-pro-image-preview:generateContent", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
                 body: JSON.stringify(payloadObj),
