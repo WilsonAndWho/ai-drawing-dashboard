@@ -12,7 +12,7 @@
 
 ## 🚀 如何使用 (How to use)
 
-1. 下载打开或直接访问https://wilsonandwho.github.io/ai-drawing-dashboard/。
+1. 下载打开或直接访问https://wilsonandwho.github.io/ai-drawing-dashboard/
 2. 在侧边栏填入对应的 API Key（API Key请自行前往服务商处获取）。
 3. 输入提示词，点击 "开始任务"。
 
